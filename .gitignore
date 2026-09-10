@@ -1,0 +1,11 @@
+/target/
+
+*.h264
+*.h265
+*.hevc
+*.av1
+
+*.log
+
+.DS_Store
+Thumbs.db
