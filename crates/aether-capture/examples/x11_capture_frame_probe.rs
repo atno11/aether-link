@@ -10,10 +10,12 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::{Error as IoError, ErrorKind};
 
-    use aether_capture::{X11CaptureSourceKind, list_x11_capture_sources};
-    use x11rb::protocol::xproto::{ConnectionExt as _, ImageFormat, MapState};
+    use aether_capture::{
+        X11CaptureSourceKind, capture_x11_window_frame, list_x11_capture_sources,
+    };
 
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<not set>".to_owned());
+
     let requested_window_index = requested_window_index()?;
 
     println!("Aether X11 single-frame capture probe");
@@ -45,62 +47,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Discovered size: {}x{}", source.width, source.height);
     println!();
 
-    let (connection, _) = x11rb::connect(None)?;
+    println!("Capturing exactly one frame through aether-capture...");
 
-    let attributes = connection.get_window_attributes(source.id)?.reply()?;
-
-    if attributes.map_state != MapState::VIEWABLE {
-        return Err(IoError::other(format!(
-            "selected X11 window 0x{:08x} is not currently viewable",
-            source.id
-        ))
-        .into());
-    }
-
-    let geometry = connection.get_geometry(source.id)?.reply()?;
-
-    if geometry.width == 0 || geometry.height == 0 {
-        return Err(IoError::other(format!(
-            "selected X11 window has invalid geometry {}x{}",
-            geometry.width, geometry.height
-        ))
-        .into());
-    }
-
-    println!("Current size:    {}x{}", geometry.width, geometry.height);
-    println!();
-    println!("Capturing exactly one frame with X11 GetImage...");
-
-    let frame = connection
-        .get_image(
-            ImageFormat::Z_PIXMAP,
-            source.id,
-            0,
-            0,
-            geometry.width,
-            geometry.height,
-            u32::MAX,
-        )?
-        .reply()?;
-
-    if frame.data.is_empty() {
-        return Err(IoError::other("X11 GetImage returned an empty frame").into());
-    }
-
+    let frame = capture_x11_window_frame(source.id)?;
     let checksum = fnv1a64(&frame.data);
 
     println!();
     println!("Capture succeeded:");
-    println!("  Size:       {}x{}", geometry.width, geometry.height);
-    println!("  Depth:      {}", frame.depth);
-    println!("  Visual:     0x{:08x}", frame.visual);
+    println!("  Size:        {}x{}", frame.width, frame.height);
+    println!("  Depth:       {}", frame.depth);
+    println!("  Visual:      0x{:08x}", frame.visual);
     println!("  Frame bytes: {}", frame.data.len());
-    println!("  FNV-1a:     0x{checksum:016x}");
+    println!("  FNV-1a:      0x{checksum:016x}");
     println!();
+
     println!("Copy path:");
     println!("  X11 drawable -> GetImage reply -> process RAM");
     println!();
-    println!("This CPU-visible copy is intentional for this probe.");
+
+    println!("The X11 -> RAM copy is part of this reusable GetImage path.");
+    println!("aether-capture moves the reply buffer without an extra frame-data clone.");
     println!("GetImage is not intended to be the final zero-copy capture path.");
 
     Ok(())
