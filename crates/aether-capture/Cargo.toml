@@ -12,3 +12,7 @@ x11rb = "0.14.0"
 [[example]]
 name = "x11_list_sources_probe"
 path = "examples/x11_list_sources_probe.rs"
+
+[[example]]
+name = "x11_capture_frame_probe"
+path = "examples/x11_capture_frame_probe.rs"

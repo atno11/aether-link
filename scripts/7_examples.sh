@@ -9,6 +9,7 @@ OUTPUT_FILE="$(mktemp)"
 CLEAN_OUTPUT_FILE="$(mktemp)"
 METADATA_FILE="$(mktemp)"
 EXAMPLES_FILE="$(mktemp)"
+ARGS_FILE="$(mktemp)"
 
 if [[ -z "${NO_COLOR:-}" ]]; then
     RESET=$'\033[0m'
@@ -37,6 +38,7 @@ cleanup() {
     rm -f "$CLEAN_OUTPUT_FILE"
     rm -f "$METADATA_FILE"
     rm -f "$EXAMPLES_FILE"
+    rm -f "$ARGS_FILE"
 }
 
 trap cleanup EXIT
@@ -89,6 +91,42 @@ copy_to_clipboard() {
 
     echo
     print_success "Output copied to clipboard."
+}
+
+parse_example_arguments() {
+    local input="$1"
+
+    PARSED_ARGS=()
+
+    if [[ -z "$input" ]]; then
+        return 0
+    fi
+
+    : > "$ARGS_FILE"
+
+    if ! python3 - "$input" "$ARGS_FILE" <<'PY'
+import shlex
+import sys
+
+input_value = sys.argv[1]
+output_path = sys.argv[2]
+
+try:
+    arguments = shlex.split(input_value)
+except ValueError as error:
+    print(f"Invalid arguments: {error}", file=sys.stderr)
+    sys.exit(1)
+
+with open(output_path, "wb") as output_file:
+    for argument in arguments:
+        output_file.write(argument.encode("utf-8"))
+        output_file.write(b"\0")
+PY
+    then
+        return 1
+    fi
+
+    mapfile -d '' -t PARSED_ARGS < "$ARGS_FILE"
 }
 
 parse_examples_metadata() {
@@ -190,10 +228,23 @@ show_menu() {
 
 run_example() {
     local entry="$1"
+    shift
+
+    local example_args=("$@")
 
     IFS=$'\t' read -r package example manifest <<< "$entry"
 
     local relative_manifest="${manifest#"$WORKSPACE_DIR"/}"
+
+    local cargo_command=(
+        cargo run
+        --manifest-path "$manifest"
+        --example "$example"
+    )
+
+    if (( ${#example_args[@]} > 0 )); then
+        cargo_command+=(-- "${example_args[@]}")
+    fi
 
     : > "$OUTPUT_FILE"
 
@@ -221,15 +272,23 @@ run_example() {
         print_info "Manifest:"
         printf '  %b%s%b\n' "$YELLOW" "$relative_manifest" "$RESET"
 
+        if (( ${#example_args[@]} > 0 )); then
+            echo
+
+            print_info "Arguments:"
+
+            printf '  %b' "$YELLOW"
+            printf '%q ' "${example_args[@]}"
+            printf '%b\n' "$RESET"
+        fi
+
         echo
 
         print_info "Running example..."
 
         echo
 
-        cargo run \
-            --manifest-path "$manifest" \
-            --example "$example"
+        "${cargo_command[@]}"
 
         local status=$?
 
@@ -386,8 +445,24 @@ while true; do
         *)
             if [[ "$option" =~ ^[0-9]+$ ]] &&
                (( option >= 1 && option <= ${#EXAMPLES[@]} )); then
+                echo
+
+                read -r -p "Arguments (optional): " arguments_input
+
+                if ! parse_example_arguments "$arguments_input"; then
+                    echo
+                    print_error "Failed to parse example arguments."
+
+                    echo
+                    read -r -p "Press Enter to continue..."
+
+                    continue
+                fi
+
                 set +e
-                run_example "${EXAMPLES[$((option - 1))]}"
+                run_example \
+                    "${EXAMPLES[$((option - 1))]}" \
+                    "${PARSED_ARGS[@]}"
                 set -e
             else
                 echo
