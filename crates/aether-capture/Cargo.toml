@@ -5,3 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = "0.14.0"
+
+[[example]]
+name = "x11_list_sources_probe"
+path = "examples/x11_list_sources_probe.rs"

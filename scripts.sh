@@ -108,6 +108,7 @@ show_menu() {
     printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}5)${RESET} Run                                     ${BOLD}${CYAN}│${RESET}"
     printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}6)${RESET} Build                                   ${BOLD}${CYAN}│${RESET}"
     printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}7)${RESET} Examples                                ${BOLD}${CYAN}│${RESET}"
+    printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}8)${RESET} Zip                                     ${BOLD}${CYAN}│${RESET}"
     printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}0)${RESET} Exit                                    ${BOLD}${CYAN}│${RESET}"
     printf '%b\n' "${BOLD}${CYAN}│                                             │${RESET}"
     printf '%b\n' "${BOLD}${CYAN}╰─────────────────────────────────────────────╯${RESET}"
@@ -147,6 +148,10 @@ while true; do
 
         7)
             run_script "7_examples.sh" --no-pause
+            ;;
+
+        8)
+            run_script "8_zip.sh" --no-pause
             ;;
 
         0)

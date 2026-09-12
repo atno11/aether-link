@@ -7,6 +7,8 @@ WORKSPACE_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 OUTPUT_FILE="$(mktemp)"
 CLEAN_OUTPUT_FILE="$(mktemp)"
+METADATA_FILE="$(mktemp)"
+EXAMPLES_FILE="$(mktemp)"
 
 if [[ -z "${NO_COLOR:-}" ]]; then
     RESET=$'\033[0m'
@@ -33,6 +35,8 @@ fi
 cleanup() {
     rm -f "$OUTPUT_FILE"
     rm -f "$CLEAN_OUTPUT_FILE"
+    rm -f "$METADATA_FILE"
+    rm -f "$EXAMPLES_FILE"
 }
 
 trap cleanup EXIT
@@ -77,6 +81,7 @@ copy_to_clipboard() {
         print_info "Install it with:"
         echo
         printf '  %bsudo pacman -S xclip%b\n' "$YELLOW" "$RESET"
+
         return 1
     fi
 
@@ -86,34 +91,74 @@ copy_to_clipboard() {
     print_success "Output copied to clipboard."
 }
 
-discover_examples() {
-    mapfile -t EXAMPLES < <(
-        cargo metadata \
-            --no-deps \
-            --format-version 1 |
-            python3 -c '
+parse_examples_metadata() {
+    python3 - "$METADATA_FILE" <<'PY'
 import json
 import sys
 
-metadata = json.load(sys.stdin)
+metadata_path = sys.argv[1]
+
+with open(metadata_path, "r", encoding="utf-8") as metadata_file:
+    metadata = json.load(metadata_file)
+
 workspace_members = set(metadata["workspace_members"])
+examples = []
 
 for package in metadata["packages"]:
     if package["id"] not in workspace_members:
         continue
 
-    manifest = package["manifest_path"]
     package_name = package["name"]
+    manifest_path = package["manifest_path"]
 
     for target in package["targets"]:
-        if "example" in target["kind"]:
-            print(
-                f"{package_name}\t"
-                f"{target['name']}\t"
-                f"{manifest}"
+        if "example" not in target["kind"]:
+            continue
+
+        example_name = target["name"]
+
+        examples.append(
+            (
+                package_name,
+                example_name,
+                manifest_path,
             )
-'
+        )
+
+examples.sort(key=lambda entry: (entry[0], entry[1]))
+
+for package_name, example_name, manifest_path in examples:
+    print(
+        package_name,
+        example_name,
+        manifest_path,
+        sep="\t",
     )
+PY
+}
+
+discover_examples() {
+    : > "$METADATA_FILE"
+    : > "$EXAMPLES_FILE"
+
+    if ! cargo metadata \
+        --no-deps \
+        --format-version 1 \
+        > "$METADATA_FILE"; then
+        echo
+        print_error "Failed to read Cargo workspace metadata."
+
+        return 1
+    fi
+
+    if ! parse_examples_metadata > "$EXAMPLES_FILE"; then
+        echo
+        print_error "Failed to parse example targets from Cargo metadata."
+
+        return 1
+    fi
+
+    mapfile -t EXAMPLES < "$EXAMPLES_FILE"
 }
 
 show_menu() {
@@ -156,24 +201,30 @@ run_example() {
 
     {
         echo
+
         printf '%b\n' "${BOLD}${CYAN}╭─────────────────────────────────────────────╮${RESET}"
         printf '%b\n' "${BOLD}${CYAN}│                RUN EXAMPLE                  │${RESET}"
         printf '%b\n' "${BOLD}${CYAN}╰─────────────────────────────────────────────╯${RESET}"
+
         echo
 
         print_info "Package:"
         printf '  %b%s%b\n' "$YELLOW" "$package" "$RESET"
 
         echo
+
         print_info "Example:"
         printf '  %b%s%b\n' "$YELLOW" "$example" "$RESET"
 
         echo
+
         print_info "Manifest:"
         printf '  %b%s%b\n' "$YELLOW" "$relative_manifest" "$RESET"
 
         echo
+
         print_info "Running example..."
+
         echo
 
         cargo run \
@@ -212,28 +263,33 @@ run_all_examples() {
 
     {
         echo
+
         printf '%b\n' "${BOLD}${CYAN}╭─────────────────────────────────────────────╮${RESET}"
         printf '%b\n' "${BOLD}${CYAN}│              RUN ALL EXAMPLES               │${RESET}"
         printf '%b\n' "${BOLD}${CYAN}╰─────────────────────────────────────────────╯${RESET}"
+
         echo
 
         for entry in "${EXAMPLES[@]}"; do
             IFS=$'\t' read -r package example manifest <<< "$entry"
 
             printf '%b\n' "${CYAN}───────────────────────────────────────────────${RESET}"
+
             echo
+
             print_info "Running:"
+
             printf '  %b%s / %s%b\n' \
                 "$YELLOW" \
                 "$package" \
                 "$example" \
                 "$RESET"
+
             echo
 
             if cargo run \
                 --manifest-path "$manifest" \
                 --example "$example"; then
-
                 echo
                 print_success "$package / $example"
             else
@@ -241,6 +297,7 @@ run_all_examples() {
 
                 echo
                 print_error "$package / $example failed with status $status."
+
                 failed=1
             fi
 
@@ -248,6 +305,7 @@ run_all_examples() {
         done
 
         printf '%b\n' "${CYAN}───────────────────────────────────────────────${RESET}"
+
         echo
 
         if [[ $failed -eq 0 ]]; then
@@ -271,34 +329,44 @@ run_all_examples() {
 
 if ! command -v cargo >/dev/null 2>&1; then
     print_error "cargo was not found in PATH."
+
     exit 1
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
     print_error "python3 was not found in PATH."
+
     exit 1
 fi
 
 if [[ ! -f "Cargo.toml" ]]; then
     print_error "Cargo.toml was not found at:"
+
     echo
     printf '  %b%s%b\n' "$YELLOW" "$WORKSPACE_DIR" "$RESET"
+
     exit 1
 fi
 
-discover_examples
+if ! discover_examples; then
+    exit 1
+fi
 
 if [[ ${#EXAMPLES[@]} -eq 0 ]]; then
     clear_screen
+
     echo
     print_warning "No examples found in the workspace."
+
     echo
     read -r -p "Press Enter to continue..."
+
     exit 0
 fi
 
 while true; do
     clear_screen
+
     show_menu
 
     echo
@@ -318,16 +386,15 @@ while true; do
         *)
             if [[ "$option" =~ ^[0-9]+$ ]] &&
                (( option >= 1 && option <= ${#EXAMPLES[@]} )); then
-
                 set +e
                 run_example "${EXAMPLES[$((option - 1))]}"
                 set -e
             else
                 echo
                 print_warning "Invalid option: $option"
+
                 sleep 1
             fi
             ;;
     esac
 done
-
