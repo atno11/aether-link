@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
+use x11rb::connection::Connection;
 use x11rb::errors::{ConnectError, ConnectionError, ReplyError};
 use x11rb::protocol::ErrorKind;
 use x11rb::protocol::xproto::{ConnectionExt as _, ImageFormat, MapState};
@@ -22,7 +23,7 @@ pub struct X11CaptureFrame {
     pub data: Vec<u8>,
 }
 
-/// Error returned when a single X11 window frame cannot be captured.
+/// Error returned when an X11 window frame cannot be captured.
 #[derive(Debug)]
 pub enum X11FrameCaptureError {
     Connect(ConnectError),
@@ -121,6 +122,13 @@ impl From<ConnectionError> for X11FrameCaptureError {
 pub fn capture_x11_window_frame(window: u32) -> Result<X11CaptureFrame, X11FrameCaptureError> {
     let (connection, _) = x11rb::connect(None)?;
 
+    capture_x11_window_frame_with_connection(&connection, window)
+}
+
+pub(super) fn capture_x11_window_frame_with_connection<C: Connection>(
+    connection: &C,
+    window: u32,
+) -> Result<X11CaptureFrame, X11FrameCaptureError> {
     let attributes = connection
         .get_window_attributes(window)?
         .reply()

@@ -13,8 +13,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     use std::time::{Duration, Instant};
 
     use aether_capture::{
-        X11CaptureSourceKind, X11FrameCaptureError, capture_x11_window_frame,
-        list_x11_capture_sources,
+        X11CaptureSession, X11CaptureSourceKind, X11FrameCaptureError, list_x11_capture_sources,
     };
 
     const DEFAULT_TARGET_FPS: u32 = 60;
@@ -23,6 +22,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let (requested_window_index, target_fps) =
         requested_arguments(DEFAULT_TARGET_FPS, MAX_TARGET_FPS)?;
+
     let display = std::env::var("DISPLAY").unwrap_or_else(|_| "<not set>".to_owned());
 
     println!("Aether X11 continuous capture probe");
@@ -54,15 +54,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Title:           {:?}", source.title);
     println!("  Discovered size: {}x{}", source.width, source.height);
     println!();
+
     println!("Validation:");
     println!("  - resize the selected window and watch for a size-change event");
     println!("  - hide/unmap it so X11 reports it as not viewable, then restore it");
     println!("  - close it to verify clean termination on an unavailable XID");
     println!();
+
     println!("Copy path: X11 drawable -> GetImage reply -> process RAM");
-    println!("This probe intentionally reuses the validated single-frame API.");
-    println!("That API currently opens an X11 connection for each capture attempt.");
+    println!("This probe consumes the public X11CaptureSession API.");
+    println!("The session keeps one X11 connection open across capture attempts.");
     println!();
+
+    let session = X11CaptureSession::open(source.id)?;
 
     let frame_interval = Duration::from_secs_f64(1.0 / f64::from(target_fps));
     let started_at = Instant::now();
@@ -83,7 +87,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut has_invalid_geometry = false;
 
     loop {
-        match capture_x11_window_frame(source.id) {
+        match session.capture_next_frame() {
             Ok(frame) => {
                 metrics.captured_frames += 1;
 
@@ -101,13 +105,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                 if metrics.last_size != size {
                     metrics.resize_events += 1;
+
                     println!(
                         "[resize] {}x{} -> {}x{}",
                         metrics.last_size.0, metrics.last_size.1, frame.width, frame.height
                     );
+
                     metrics.last_size = size;
                 }
             }
+
             Err(X11FrameCaptureError::WindowNotViewable(_)) => {
                 metrics.capture_errors += 1;
                 metrics.not_viewable_errors += 1;
@@ -117,12 +124,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     is_not_viewable = true;
                 }
             }
+
             Err(X11FrameCaptureError::WindowUnavailable(_)) => {
                 metrics.capture_errors += 1;
+
                 println!("[state] window is unavailable; assuming it was closed");
+
                 print_final_metrics(started_at, &metrics);
+
                 break;
             }
+
             Err(error @ X11FrameCaptureError::InvalidGeometry { .. }) => {
                 metrics.capture_errors += 1;
                 metrics.invalid_geometry_errors += 1;
@@ -132,9 +144,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     has_invalid_geometry = true;
                 }
             }
+
             Err(error) => {
                 metrics.capture_errors += 1;
+
                 print_final_metrics(started_at, &metrics);
+
                 return Err(error.into());
             }
         }
@@ -144,6 +159,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         if metrics_elapsed >= METRICS_INTERVAL {
             let interval_frames = metrics.captured_frames - frames_at_last_report;
+
             print_periodic_metrics(started_at, metrics_elapsed, interval_frames, &metrics);
 
             last_metrics_at = now;
@@ -151,6 +167,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         next_capture_at += frame_interval;
+
         let now = Instant::now();
 
         if next_capture_at > now {
