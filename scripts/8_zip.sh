@@ -7,6 +7,9 @@ WORKSPACE_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 ARCHIVE_DIR="$WORKSPACE_DIR/dist/archives"
 
+MIN_BOX_WIDTH=47
+MAX_BOX_WIDTH=100
+
 if [[ -z "${NO_COLOR:-}" ]]; then
     RESET=$'\033[0m'
     BOLD=$'\033[1m'
@@ -51,6 +54,152 @@ print_info() {
     printf '%b\n' "${GRAY}$1${RESET}"
 }
 
+terminal_width() {
+    local width=""
+
+    if command -v tput >/dev/null 2>&1; then
+        width="$(tput cols 2>/dev/null || true)"
+    fi
+
+    if [[ ! "$width" =~ ^[0-9]+$ ]]; then
+        width=80
+    fi
+
+    printf '%d\n' "$width"
+}
+
+box_width() {
+    local terminal
+    local width
+
+    terminal="$(terminal_width)"
+
+    width=$((terminal - 4))
+
+    if (( width < MIN_BOX_WIDTH )); then
+        width="$MIN_BOX_WIDTH"
+    fi
+
+    if (( width > MAX_BOX_WIDTH )); then
+        width="$MAX_BOX_WIDTH"
+    fi
+
+    printf '%d\n' "$width"
+}
+
+repeat_char() {
+    local char="$1"
+    local count="$2"
+    local i
+
+    for ((i = 0; i < count; i++)); do
+        printf '%s' "$char"
+    done
+}
+
+print_box_top() {
+    local width="$1"
+
+    printf '%b╭' "${BOLD}${CYAN}"
+    repeat_char '─' "$((width - 2))"
+    printf '╮%b\n' "$RESET"
+}
+
+print_box_separator() {
+    local width="$1"
+
+    printf '%b├' "${BOLD}${CYAN}"
+    repeat_char '─' "$((width - 2))"
+    printf '┤%b\n' "$RESET"
+}
+
+print_box_bottom() {
+    local width="$1"
+
+    printf '%b╰' "${BOLD}${CYAN}"
+    repeat_char '─' "$((width - 2))"
+    printf '╯%b\n' "$RESET"
+}
+
+print_box_empty() {
+    local width="$1"
+
+    printf '%b│%b' "${BOLD}${CYAN}" "$RESET"
+    printf '%*s' "$((width - 2))" ''
+    printf '%b│%b\n' "${BOLD}${CYAN}" "$RESET"
+}
+
+print_box_title() {
+    local width="$1"
+    local title="$2"
+
+    local inner_width
+    local title_length
+    local left_padding
+    local right_padding
+
+    inner_width=$((width - 2))
+    title_length=${#title}
+
+    left_padding=$(((inner_width - title_length) / 2))
+    right_padding=$((inner_width - title_length - left_padding))
+
+    printf '%b│%b' "${BOLD}${CYAN}" "$RESET"
+
+    printf '%*s' "$left_padding" ''
+
+    printf '%b%s%b' \
+        "$BOLD" \
+        "$title" \
+        "$RESET"
+
+    printf '%*s' "$right_padding" ''
+
+    printf '%b│%b\n' "${BOLD}${CYAN}" "$RESET"
+}
+
+print_box_option() {
+    local width="$1"
+    local key="$2"
+    local label="$3"
+
+    local inner_width
+    local visible_length
+    local right_padding
+
+    inner_width=$((width - 2))
+
+    visible_length=$((2 + ${#key} + 2 + ${#label}))
+    right_padding=$((inner_width - visible_length))
+
+    if (( right_padding < 0 )); then
+        right_padding=0
+    fi
+
+    printf '%b│%b' "${BOLD}${CYAN}" "$RESET"
+
+    printf '  %b%s)%b %s' \
+        "$BOLD" \
+        "$key" \
+        "$RESET" \
+        "$label"
+
+    printf '%*s' "$right_padding" ''
+
+    printf '%b│%b\n' "${BOLD}${CYAN}" "$RESET"
+}
+
+print_banner() {
+    local title="$1"
+    local width
+
+    width="$(box_width)"
+
+    print_box_top "$width"
+    print_box_title "$width" "$title"
+    print_box_bottom "$width"
+}
+
 format_size() {
     local file="$1"
 
@@ -79,6 +228,7 @@ archive_name() {
 create_archive() {
     local label="$1"
     local suffix="$2"
+
     shift 2
 
     local paths=("$@")
@@ -91,15 +241,19 @@ create_archive() {
     clear_screen
 
     echo
-    printf '%b\n' "${BOLD}${CYAN}╭─────────────────────────────────────────────╮${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│                CREATE ZIP                   │${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}╰─────────────────────────────────────────────╯${RESET}"
+
+    print_banner "CREATE ZIP"
+
     echo
 
     print_info "Content:"
-    printf '  %b%s%b\n' "$YELLOW" "$label" "$RESET"
+    printf '  %b%s%b\n' \
+        "$YELLOW" \
+        "$label" \
+        "$RESET"
 
     echo
+
     print_info "Output:"
     printf '  %b%s%b\n' \
         "$YELLOW" \
@@ -107,7 +261,9 @@ create_archive() {
         "$RESET"
 
     echo
+
     print_info "Creating archive..."
+
     echo
 
     if zip \
@@ -132,6 +288,7 @@ create_archive() {
         print_success "Archive created successfully."
 
         echo
+
         print_info "Archive:"
         printf '  %b%s%b\n' \
             "$YELLOW" \
@@ -139,8 +296,12 @@ create_archive() {
             "$RESET"
 
         echo
+
         print_info "Size:"
-        printf '  %b%s%b\n' "$YELLOW" "$size" "$RESET"
+        printf '  %b%s%b\n' \
+            "$YELLOW" \
+            "$size" \
+            "$RESET"
 
         return 0
     fi
@@ -148,6 +309,7 @@ create_archive() {
     local status=$?
 
     echo
+
     print_error "Failed to create archive with status $status."
 
     rm -f "$archive"
@@ -156,24 +318,36 @@ create_archive() {
 }
 
 show_menu() {
-    printf '%b\n' "${BOLD}${CYAN}╭─────────────────────────────────────────────╮${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│                ZIP SOURCE                   │${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}├─────────────────────────────────────────────┤${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│                                             │${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}1)${RESET} Apps                                    ${BOLD}${CYAN}│${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}2)${RESET} Crates                                  ${BOLD}${CYAN}│${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}3)${RESET} Apps + Crates                           ${BOLD}${CYAN}│${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│                                             │${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}0)${RESET} Back                                    ${BOLD}${CYAN}│${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│                                             │${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}╰─────────────────────────────────────────────╯${RESET}"
+    local width
+
+    width="$(box_width)"
+
+    print_box_top "$width"
+    print_box_title "$width" "ZIP SOURCE"
+    print_box_separator "$width"
+
+    print_box_empty "$width"
+
+    print_box_option "$width" "1" "Apps"
+    print_box_option "$width" "2" "Crates"
+    print_box_option "$width" "3" "Apps + Crates"
+
+    print_box_empty "$width"
+
+    print_box_option "$width" "0" "Back"
+
+    print_box_empty "$width"
+
+    print_box_bottom "$width"
 }
 
 if ! command -v zip >/dev/null 2>&1; then
     print_error "zip was not found in PATH."
 
     echo
+
     print_info "Install it with:"
+
     echo
 
     printf '  %bsudo pacman -S zip%b\n' \
@@ -187,6 +361,7 @@ if [[ ! -f "$WORKSPACE_DIR/Cargo.toml" ]]; then
     print_error "Cargo.toml was not found at:"
 
     echo
+
     printf '  %b%s%b\n' \
         "$YELLOW" \
         "$WORKSPACE_DIR" \
@@ -209,9 +384,11 @@ fi
 
 while true; do
     clear_screen
+
     show_menu
 
     echo
+
     read -r -p "Select an option: " option
 
     case "$option" in
@@ -221,10 +398,12 @@ while true; do
 
         1)
             set +e
+
             create_archive \
                 "apps/" \
                 "apps" \
                 "apps"
+
             set -e
 
             echo
@@ -233,10 +412,12 @@ while true; do
 
         2)
             set +e
+
             create_archive \
                 "crates/" \
                 "crates" \
                 "crates"
+
             set -e
 
             echo
@@ -245,11 +426,13 @@ while true; do
 
         3)
             set +e
+
             create_archive \
                 "apps/ + crates/" \
                 "source" \
                 "apps" \
                 "crates"
+
             set -e
 
             echo
@@ -258,6 +441,7 @@ while true; do
 
         *)
             echo
+
             print_warning "Invalid option: $option"
 
             sleep 1

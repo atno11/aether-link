@@ -11,6 +11,9 @@ METADATA_FILE="$(mktemp)"
 EXAMPLES_FILE="$(mktemp)"
 ARGS_FILE="$(mktemp)"
 
+MIN_BOX_WIDTH=47
+MAX_BOX_WIDTH=100
+
 if [[ -z "${NO_COLOR:-}" ]]; then
     RESET=$'\033[0m'
     BOLD=$'\033[1m'
@@ -69,6 +72,178 @@ print_info() {
     printf '%b\n' "${GRAY}$1${RESET}"
 }
 
+terminal_width() {
+    local width=""
+
+    if command -v tput >/dev/null 2>&1; then
+        width="$(tput cols 2>/dev/null || true)"
+    fi
+
+    if [[ ! "$width" =~ ^[0-9]+$ ]]; then
+        width=80
+    fi
+
+    printf '%d\n' "$width"
+}
+
+box_width() {
+    local terminal
+    local width
+
+    terminal="$(terminal_width)"
+
+    width=$((terminal - 4))
+
+    if (( width < MIN_BOX_WIDTH )); then
+        width="$MIN_BOX_WIDTH"
+    fi
+
+    if (( width > MAX_BOX_WIDTH )); then
+        width="$MAX_BOX_WIDTH"
+    fi
+
+    printf '%d\n' "$width"
+}
+
+repeat_char() {
+    local char="$1"
+    local count="$2"
+    local i
+
+    for ((i = 0; i < count; i++)); do
+        printf '%s' "$char"
+    done
+}
+
+print_box_top() {
+    local width="$1"
+
+    printf '%b╭' "${BOLD}${CYAN}"
+    repeat_char '─' "$((width - 2))"
+    printf '╮%b\n' "$RESET"
+}
+
+print_box_separator() {
+    local width="$1"
+
+    printf '%b├' "${BOLD}${CYAN}"
+    repeat_char '─' "$((width - 2))"
+    printf '┤%b\n' "$RESET"
+}
+
+print_box_bottom() {
+    local width="$1"
+
+    printf '%b╰' "${BOLD}${CYAN}"
+    repeat_char '─' "$((width - 2))"
+    printf '╯%b\n' "$RESET"
+}
+
+print_box_empty() {
+    local width="$1"
+
+    printf '%b│%b' "${BOLD}${CYAN}" "$RESET"
+    printf '%*s' "$((width - 2))" ''
+    printf '%b│%b\n' "${BOLD}${CYAN}" "$RESET"
+}
+
+print_box_title() {
+    local width="$1"
+    local title="$2"
+
+    local inner_width
+    local title_length
+    local left_padding
+    local right_padding
+
+    inner_width=$((width - 2))
+    title_length=${#title}
+
+    left_padding=$(((inner_width - title_length) / 2))
+    right_padding=$((inner_width - title_length - left_padding))
+
+    printf '%b│%b' "${BOLD}${CYAN}" "$RESET"
+
+    printf '%*s' "$left_padding" ''
+
+    printf '%b%s%b' \
+        "$BOLD" \
+        "$title" \
+        "$RESET"
+
+    printf '%*s' "$right_padding" ''
+
+    printf '%b│%b\n' "${BOLD}${CYAN}" "$RESET"
+}
+
+print_box_option() {
+    local width="$1"
+    local key="$2"
+    local label="$3"
+
+    local inner_width
+    local max_label_width
+    local visible_length
+    local right_padding
+
+    inner_width=$((width - 2))
+
+    # 2 spaces + 2-char key + ") " = 6 visible characters.
+    max_label_width=$((inner_width - 6))
+
+    if (( max_label_width < 1 )); then
+        max_label_width=1
+    fi
+
+    if (( ${#label} > max_label_width )); then
+        if (( max_label_width > 3 )); then
+            label="${label:0:$((max_label_width - 3))}..."
+        else
+            label="${label:0:$max_label_width}"
+        fi
+    fi
+
+    visible_length=$((6 + ${#label}))
+    right_padding=$((inner_width - visible_length))
+
+    if (( right_padding < 0 )); then
+        right_padding=0
+    fi
+
+    printf '%b│%b' "${BOLD}${CYAN}" "$RESET"
+
+    printf '  %b%2s)%b %s' \
+        "$BOLD" \
+        "$key" \
+        "$RESET" \
+        "$label"
+
+    printf '%*s' "$right_padding" ''
+
+    printf '%b│%b\n' "${BOLD}${CYAN}" "$RESET"
+}
+
+print_banner() {
+    local title="$1"
+    local width
+
+    width="$(box_width)"
+
+    print_box_top "$width"
+    print_box_title "$width" "$title"
+    print_box_bottom "$width"
+}
+
+print_horizontal_line() {
+    local width
+
+    width="$(box_width)"
+
+    printf '%b' "$CYAN"
+    repeat_char '─' "$width"
+    printf '%b\n' "$RESET"
+}
+
 strip_ansi() {
     sed -E $'s/\x1B\\[[0-9;]*[[:alpha:]]//g'
 }
@@ -79,10 +254,14 @@ copy_to_clipboard() {
     if ! command -v xclip >/dev/null 2>&1; then
         echo
         print_warning "xclip was not found in PATH."
+
         echo
         print_info "Install it with:"
+
         echo
-        printf '  %bsudo pacman -S xclip%b\n' "$YELLOW" "$RESET"
+        printf '  %bsudo pacman -S xclip%b\n' \
+            "$YELLOW" \
+            "$RESET"
 
         return 1
     fi
@@ -183,6 +362,7 @@ discover_examples() {
         --no-deps \
         --format-version 1 \
         > "$METADATA_FILE"; then
+
         echo
         print_error "Failed to read Cargo workspace metadata."
 
@@ -200,30 +380,36 @@ discover_examples() {
 }
 
 show_menu() {
-    printf '%b\n' "${BOLD}${CYAN}╭─────────────────────────────────────────────╮${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│                  EXAMPLES                   │${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}├─────────────────────────────────────────────┤${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│                                             │${RESET}"
+    local width
+
+    width="$(box_width)"
+
+    print_box_top "$width"
+    print_box_title "$width" "EXAMPLES"
+    print_box_separator "$width"
+
+    print_box_empty "$width"
 
     for i in "${!EXAMPLES[@]}"; do
         IFS=$'\t' read -r package example manifest <<< "${EXAMPLES[$i]}"
 
+        local label
         label="$package / $example"
 
-        printf '│  %b%2d)%b %-38s%b│%b\n' \
-            "$BOLD" \
+        print_box_option \
+            "$width" \
             "$((i + 1))" \
-            "$RESET" \
-            "$label" \
-            "${BOLD}${CYAN}" \
-            "$RESET"
+            "$label"
     done
 
-    printf '%b\n' "${BOLD}${CYAN}│                                             │${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}A)${RESET} Run All                                 ${BOLD}${CYAN}│${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│  ${RESET}${BOLD}0)${RESET} Back                                    ${BOLD}${CYAN}│${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}│                                             │${RESET}"
-    printf '%b\n' "${BOLD}${CYAN}╰─────────────────────────────────────────────╯${RESET}"
+    print_box_empty "$width"
+
+    print_box_option "$width" "A" "Run All"
+    print_box_option "$width" "0" "Back"
+
+    print_box_empty "$width"
+
+    print_box_bottom "$width"
 }
 
 run_example() {
@@ -253,24 +439,31 @@ run_example() {
     {
         echo
 
-        printf '%b\n' "${BOLD}${CYAN}╭─────────────────────────────────────────────╮${RESET}"
-        printf '%b\n' "${BOLD}${CYAN}│                RUN EXAMPLE                  │${RESET}"
-        printf '%b\n' "${BOLD}${CYAN}╰─────────────────────────────────────────────╯${RESET}"
+        print_banner "RUN EXAMPLE"
 
         echo
 
         print_info "Package:"
-        printf '  %b%s%b\n' "$YELLOW" "$package" "$RESET"
+        printf '  %b%s%b\n' \
+            "$YELLOW" \
+            "$package" \
+            "$RESET"
 
         echo
 
         print_info "Example:"
-        printf '  %b%s%b\n' "$YELLOW" "$example" "$RESET"
+        printf '  %b%s%b\n' \
+            "$YELLOW" \
+            "$example" \
+            "$RESET"
 
         echo
 
         print_info "Manifest:"
-        printf '  %b%s%b\n' "$YELLOW" "$relative_manifest" "$RESET"
+        printf '  %b%s%b\n' \
+            "$YELLOW" \
+            "$relative_manifest" \
+            "$RESET"
 
         if (( ${#example_args[@]} > 0 )); then
             echo
@@ -323,16 +516,14 @@ run_all_examples() {
     {
         echo
 
-        printf '%b\n' "${BOLD}${CYAN}╭─────────────────────────────────────────────╮${RESET}"
-        printf '%b\n' "${BOLD}${CYAN}│              RUN ALL EXAMPLES               │${RESET}"
-        printf '%b\n' "${BOLD}${CYAN}╰─────────────────────────────────────────────╯${RESET}"
+        print_banner "RUN ALL EXAMPLES"
 
         echo
 
         for entry in "${EXAMPLES[@]}"; do
             IFS=$'\t' read -r package example manifest <<< "$entry"
 
-            printf '%b\n' "${CYAN}───────────────────────────────────────────────${RESET}"
+            print_horizontal_line
 
             echo
 
@@ -349,6 +540,7 @@ run_all_examples() {
             if cargo run \
                 --manifest-path "$manifest" \
                 --example "$example"; then
+
                 echo
                 print_success "$package / $example"
             else
@@ -363,7 +555,7 @@ run_all_examples() {
             echo
         done
 
-        printf '%b\n' "${CYAN}───────────────────────────────────────────────${RESET}"
+        print_horizontal_line
 
         echo
 
@@ -402,7 +594,11 @@ if [[ ! -f "Cargo.toml" ]]; then
     print_error "Cargo.toml was not found at:"
 
     echo
-    printf '  %b%s%b\n' "$YELLOW" "$WORKSPACE_DIR" "$RESET"
+
+    printf '  %b%s%b\n' \
+        "$YELLOW" \
+        "$WORKSPACE_DIR" \
+        "$RESET"
 
     exit 1
 fi
@@ -415,6 +611,7 @@ if [[ ${#EXAMPLES[@]} -eq 0 ]]; then
     clear_screen
 
     echo
+
     print_warning "No examples found in the workspace."
 
     echo
@@ -438,19 +635,23 @@ while true; do
 
         a|A)
             set +e
+
             run_all_examples
+
             set -e
             ;;
 
         *)
             if [[ "$option" =~ ^[0-9]+$ ]] &&
                (( option >= 1 && option <= ${#EXAMPLES[@]} )); then
+
                 echo
 
                 read -r -p "Arguments (optional): " arguments_input
 
                 if ! parse_example_arguments "$arguments_input"; then
                     echo
+
                     print_error "Failed to parse example arguments."
 
                     echo
@@ -460,12 +661,15 @@ while true; do
                 fi
 
                 set +e
+
                 run_example \
                     "${EXAMPLES[$((option - 1))]}" \
                     "${PARSED_ARGS[@]}"
+
                 set -e
             else
                 echo
+
                 print_warning "Invalid option: $option"
 
                 sleep 1
